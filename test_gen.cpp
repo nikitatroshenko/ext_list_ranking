@@ -48,7 +48,6 @@ int main(int argc, char const *argv[])
     fwrite(&size, sizeof size, 1, input);
     auto *list = new uint32_t[size]();
     auto *edges = new uint32_t[2 * size]();
-    auto *joined = new uint32_t[3 * size]();
 
     for (size_t i = 0; i < size; i++) {
         list[i] = uint32_t(i + 1);
@@ -58,27 +57,30 @@ int main(int argc, char const *argv[])
     for (size_t i = 0; i < size; i++) {
         edges[2 * i] = list[i];
         edges[2 * i + 1] = list[(i + 1) % size];
-        joined[3 * i] = list[i];
-        joined[3 * i + 1] = list[(i + 1) % size];
-        joined[3 * i + 2] = list[(i + 2) % size];
     }
-    auto *compressed_joined = (tuple<uint32_t, 3> *) joined;
-    qsort(compressed_joined, size, sizeof *compressed_joined, cmp_by<uint32_t, 0>);
 
     auto *compressed_edges = (uint64_t *) edges;
     std::shuffle(compressed_edges, compressed_edges + size, mt);
 
+    auto min_elem = *list;
+    size_t min_elem_idx = 0;
+    for (uint64_t i = 1; i < size; i++) {
+        if (list[i] < min_elem) {
+            min_elem = list[i];
+            min_elem_idx = i;
+        }
+    }
+
     for (uint64_t i = 0; i < size; i++) {
         fwrite(edges + 2 * i, sizeof *edges, 1, input);
         fwrite(edges + 2 * i + 1, sizeof *edges, 1, input);
-        fwrite(joined + 3 * i, sizeof *joined, 1, output);
-        fwrite(joined + 3 * i + 1, sizeof *joined, 1, output);
-        fwrite(joined + 3 * i + 2, sizeof *joined, 1, output);
+        fwrite(list + (min_elem_idx + i) % size, sizeof *list, 1, output);
     }
 
     fclose(input);
     fclose(output);
 
     delete[] list;
+    delete[] edges;
     return EXIT_SUCCESS;
 }
