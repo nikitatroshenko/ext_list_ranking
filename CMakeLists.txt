@@ -1,0 +1,7 @@
+cmake_minimum_required(3.12)
+project(ext_list_ranking)
+
+set(CMAKE_CXX_STANDARD 11)
+
+add_executable(ext_list_ranking main.cpp)
+add_executable(test_gen test_gen.cpp)
