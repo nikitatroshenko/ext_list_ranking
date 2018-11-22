@@ -6,9 +6,10 @@
 #include <cmath>
 #include <queue>
 #include <algorithm>
+#include <functional>
 
 #ifndef DEFAULT_MEMORY_SIZE
-#define DEFAULT_MEMORY_SIZE (8192)
+#define DEFAULT_MEMORY_SIZE (32768)
 #endif
 
 #ifndef DEFAULT_MERGE_RANK
@@ -37,7 +38,9 @@
 #endif
 
 #ifndef __compar_fn_t
-typedef int(*__compar_fn_t)(const void *, const void *);
+
+typedef int(*comparator_func_t)(const void *, const void *);
+
 #endif
 
 struct run_t {
@@ -57,7 +60,6 @@ struct run_t {
 typedef uint32_t elements_size_t;
 
 struct run_pool_t {
-    static int id_counter;
 
     std::queue<run_t *> runs;
 
@@ -116,8 +118,6 @@ struct run_pool_t {
     }
 };
 
-int run_pool_t::id_counter = 0;
-
 template<typename element_T>
 int cmp_elements(const void *l, const void *r) {
     element_T left = *(element_T *) l;
@@ -135,36 +135,29 @@ int cmp_elements(const void *l, const void *r) {
 template<typename element_T>
 struct merger_t {
     element_T *ram;
-    size_t ram_size;
+    size_t ram_size_elements;
     run_pool_t *runs;
     bool self_alloc;
 
     bool write_output_size = true;
 
-    explicit merger_t(size_t ram_size) :
-            ram_size(ram_size),
-            runs(nullptr),
-            self_alloc(true) {
-        ram = new element_T[ram_size];
-    }
-
-    merger_t(element_T *ram, size_t ram_size) :
-            ram(ram),
-            ram_size(ram_size),
+    merger_t(void *ram, size_t ram_size_bytes) :
+            ram((element_T *) ram),
+            ram_size_elements(ram_size_bytes / sizeof(element_T)),
             runs(nullptr),
             self_alloc(false) {}
 
-    void split_into_runs(FILE *in, __compar_fn_t cmp) {
+    void split_into_runs(FILE *in, comparator_func_t cmp) {
         elements_size_t size;
 
         fread(&size, sizeof size, 1, in);
-        size_t runs_cnt = (size != 0) ? 1 + ((size - 1) / ram_size) : 0; // ceiling
+        size_t runs_cnt = (size != 0) ? 1 + ((size - 1) / ram_size_elements) : 0; // ceiling
 
         delete runs;
         runs = run_pool_t::of_size(runs_cnt + 1);
 
         for (size_t i = 0; i < runs_cnt; i++) {
-            elements_size_t read = ((i + 1) * ram_size <= size) ? ram_size : (size % ram_size);
+            auto read = static_cast<elements_size_t>(((i + 1) * ram_size_elements <= size) ? ram_size_elements : (size % ram_size_elements));
 
             fread(ram, sizeof *ram, read, in);
             qsort(ram, read, sizeof *ram, cmp);
@@ -176,19 +169,23 @@ struct merger_t {
         }
     }
 
-    void merge(FILE *files[], size_t rank, FILE *result, __compar_fn_t cmp) {
-        struct input { FILE *file{}; element_T val{}; elements_size_t size = 0; bool read = false;} *inputs = new input[rank]();
-        elements_size_t ressiz = 0;
+    void merge(FILE *files[], size_t rank, FILE *result, comparator_func_t cmp) {
+        struct input {
+            FILE *file{};
+            element_T val{};
+            elements_size_t size = 0;
+            bool read = false;
+        } *inputs = new input[rank]();
+        elements_size_t result_size = 0;
 
         for (size_t i = 0; i < rank; i++) {
             auto &inp = inputs[i];
             inp.file = files[i];
-            //inp = {files[i], 0, 0, false};
             fread(&inp.size, sizeof inp.size, 1, inp.file);
-            ressiz += inp.size;
+            result_size += inp.size;
         }
         if (write_output_size) {
-            fwrite(&ressiz, sizeof ressiz, 1, result);
+            fwrite(&result_size, sizeof result_size, 1, result);
         }
 
         while (true) {
@@ -216,10 +213,14 @@ struct merger_t {
         delete[] inputs;
     }
 
-    void do_merge_sort(FILE *in, FILE *out, __compar_fn_t cmp = cmp_elements<element_T>, size_t rank = DEFAULT_MERGE_RANK) {
+    void do_merge_sort(
+            FILE *in,
+            FILE *out,
+            comparator_func_t cmp = cmp_elements<element_T>,
+            size_t rank = DEFAULT_MERGE_RANK) {
         split_into_runs(in, cmp);
-        size_t block_size = ram_size / 2 / (rank);
-        size_t result_block_size = ram_size / 2;
+        size_t block_size = ram_size_elements / 2 / (rank);
+        size_t result_block_size = ram_size_elements / 2;
         auto *result_block = ram + rank * block_size;
 
         run_t *result = runs->get(result_block, sizeof *ram, result_block_size);
@@ -231,7 +232,7 @@ struct merger_t {
             return;
         }
         auto files = new FILE *[rank];
-        auto **used_runs = new run_t*[rank];
+        auto **used_runs = new run_t *[rank];
 
         auto write_output_size = this->write_output_size;
         this->write_output_size = true;
@@ -254,7 +255,7 @@ struct merger_t {
             freopen(result->get_name(), "rb+", result->file);
             setvbuf(result->file, (char *) block_start, _IOFBF, result_block_size * sizeof *block_start);
         }
-        used_runs[0] = runs->get(ram, sizeof *ram, ram_size);
+        used_runs[0] = runs->get(ram, sizeof *ram, ram_size_elements);
 
         this->write_output_size = write_output_size;
         merge(&used_runs[0]->file, 1, out, cmp);
@@ -263,6 +264,20 @@ struct merger_t {
 
         delete[] used_runs;
         delete[] files;
+    }
+
+    void sort(
+            const char *input_name,
+            const char *output_name,
+            comparator_func_t cmp = cmp_elements<element_T>,
+            size_t merge_rank = DEFAULT_MERGE_RANK) {
+        FILE *input = fopen(input_name, "rb");
+        FILE *output = fopen(output_name, "wb");
+
+        do_merge_sort(input, output, cmp, merge_rank);
+
+        fclose(input);
+        fclose(output);
     }
 
     ~merger_t() {
@@ -282,17 +297,46 @@ struct tuple {
 #define BY_SECOND_FILE_NAME ("by_second.tmp.bin")
 #define RESULT_FILE_NAME ("result.tmp.bin")
 
-template<typename element_T>
+
+tuple<uint32_t, 3> &join_deuces(
+        const tuple<uint32_t, 2> &l,
+        const tuple<uint32_t, 2> &r,
+        tuple<uint32_t, 3> &res) {
+    res.elem[0] = l.elem[0];
+    res.elem[1] = l.elem[1];
+    res.elem[2] = r.elem[1];
+    return res;
+}
+
+template<
+        typename element_T,
+        typename left_src_T,
+        typename right_src_T,
+        typename target_T
+>
 struct joiner_t {
-    element_T *ram;
-    size_t ram_size;
 
-    explicit joiner_t(size_t ram_size) :
-            ram_size(ram_size) {
-        ram = new element_T[3 * ram_size];
-    }
+    typedef left_src_T left_src_t;
+    typedef right_src_T right_src_t;
+    typedef target_T target_t;
+    typedef std::function<target_T &(const left_src_t &, const right_src_t &, target_t &)> joiner_func_t;
 
-    void join(FILE *left, FILE *right, FILE *result) {
+    char *ram;
+    size_t ram_size_elements;
+    size_t ram_size_bytes;
+    bool self_alloc;
+
+    joiner_t(char *ram, size_t ram_size_bytes) :
+            ram(ram),
+            ram_size_elements(ram_size_bytes / sizeof(element_T)),
+            ram_size_bytes(ram_size_bytes),
+            self_alloc(false) {}
+
+    void join(
+            FILE *left,
+            FILE *right,
+            FILE *result,
+            joiner_func_t joiner_func) {
         elements_size_t left_size;
         elements_size_t right_size;
         fread(&left_size, sizeof left_size, 1, left);
@@ -300,72 +344,128 @@ struct joiner_t {
         fwrite(&left_size, sizeof left_size, 1, result);
 
         for (elements_size_t i = 0; i < left_size; i++) {
-            tuple<element_T, 2> l{};
-            tuple<element_T, 2> r{};
-            tuple<element_T, 3> res{};
+            left_src_t l{};
+            right_src_t r{};
+            target_t res{};
 
             fread(&l, sizeof l, 1, left);
             fread(&r, sizeof r, 1, right);
-            res.elem[0] = l.elem[0];
-            res.elem[1] = l.elem[1];
-            res.elem[2] = r.elem[1];
+            res = joiner_func(l, r, res);
             fwrite(&res, sizeof res, 1, result);
         }
     }
 
-    template<size_t idx>
-    static int cmp_by(const void *l, const void *r) {
-        auto *lhs = (element_T *) l;
-        auto *rhs = (element_T *) r;
+    void join(
+            const char *left_name,
+            const char *right_name,
+            const char *result_name,
+            joiner_func_t joiner_func) {
+        FILE *left = fopen(left_name, "rb");
+        FILE *right = fopen(right_name, "rb");
+        FILE *result = fopen(result_name, "wb");
 
-        return lhs[idx] - rhs[idx];
-    }
+        size_t block_size = ram_size_bytes / 4;
 
-    void do_join(FILE *in, FILE *out) {
-        auto *deuce_merger = new merger_t<tuple<element_T, 2>>((tuple<element_T, 2> *) ram, ram_size);
-        FILE *by_first = fopen(BY_FIRST_FILE_NAME, "wb+");
-        FILE *by_second = fopen(BY_SECOND_FILE_NAME, "wb+");
-        FILE *result = fopen(RESULT_FILE_NAME, "wb");
+        setvbuf(left, ram, _IOFBF, block_size);
+        setvbuf(right, ram + block_size, _IOFBF, block_size);
+        setvbuf(result, ram + 2 * block_size, _IOFBF, ram_size_bytes - 2 * block_size);
 
-        deuce_merger->do_merge_sort(in, by_first, cmp_by<0>);
-        fseek(in, 0, SEEK_SET);
-        deuce_merger->do_merge_sort(in, by_second, cmp_by<1>);
-        delete deuce_merger;
+        join(left, right, result, joiner_func);
 
-        size_t block_size = ram_size / 4;
-
-        freopen(BY_FIRST_FILE_NAME, "rb+", by_first);
-        setvbuf(by_first, (char *) ram, _IOFBF, block_size * sizeof *ram);
-        freopen(BY_SECOND_FILE_NAME, "rb+", by_second);
-        setvbuf(by_second, (char *) (ram + block_size), _IOFBF, block_size * sizeof *ram);
-        freopen(RESULT_FILE_NAME, "wb+", result);
-        setvbuf(result, (char *) (ram + 2 * block_size), _IOFBF, (ram_size - 2 * block_size) * sizeof *ram);
-
-        join(by_second, by_first, result);
-
-        auto *set_merger = new merger_t<tuple<element_T, 3>>((tuple<element_T, 3> *) ram, ram_size);
-        set_merger->write_output_size = false;
-        fclose(by_first);
-        fclose(by_second);
-        freopen(RESULT_FILE_NAME, "rb+", result);
-        set_merger->do_merge_sort(result, out, cmp_by<0>);
+        fclose(left);
+        fclose(right);
         fclose(result);
-        delete set_merger;
     }
 
     ~joiner_t() {
-        delete[] ram;
+        if (self_alloc) {
+            delete[] ram;
+        }
     }
 };
 
+template<typename src_T, typename target_T>
+struct mapper_t {
+
+//    typedef target_T &(*mapper_func_t)(const src_T &, target_T &);
+    typedef std::function<target_T &(const src_T &, target_T &)> mapper_func_t;
+
+    char *ram;
+    size_t ram_size;
+    bool write_output_size = true;
+
+    mapper_t(char *ram, size_t ram_size) :
+            ram(ram),
+            ram_size(ram_size) {}
+
+    void map(
+            const char *src_name,
+            const char *target_name,
+            mapper_func_t mapper_func) {
+        FILE *src = fopen(src_name, "rb");
+        FILE *target = fopen(target_name, "wb");
+
+        size_t src_buf_size = ram_size / (sizeof(src_T) + sizeof(target_T)) * sizeof(src_T);
+        size_t target_buf_size = ram_size - src_buf_size;
+
+        setvbuf(src, ram, _IOFBF, src_buf_size);
+        setvbuf(target, ram + src_buf_size, _IOFBF, target_buf_size);
+        map(src, target, mapper_func);
+
+        fclose(src);
+        fclose(target);
+    }
+
+    void map(FILE *src, FILE *target, mapper_func_t mapper_func) {
+        elements_size_t size = 0;
+        src_T src_val{};
+        target_T target_val{};
+
+        fread(&size, sizeof size, 1, src);
+        if (write_output_size) {
+            fwrite(&size, sizeof size, 1, target);
+        }
+        for (elements_size_t i = 0; i < size; i++) {
+            fread(&src_val, sizeof src_val, 1, src);
+            target_val = mapper_func(src_val, target_val);
+            fwrite(&target_val, sizeof target_val, 1, target);
+        }
+    }
+};
+
+template<typename element_T, size_t idx>
+static int cmp_by(const void *l, const void *r) {
+    auto *lhs = (element_T *) l;
+    auto *rhs = (element_T *) r;
+
+    return lhs[idx] - rhs[idx];
+}
+
+typedef tuple<uint32_t, 2> pair;
+typedef tuple<uint32_t, 3> three;
+typedef tuple<uint32_t, 4> four;
+
 int main() {
-    FILE *in = fopen(DEFAULT_INPUT_PATTERN, "rb");
-    FILE *out = fopen(DEFAULT_OUTPUT, "wb");
+    const char *input = DEFAULT_INPUT_PATTERN;
+    const char *output = DEFAULT_OUTPUT;
+    size_t ram_size = DEFAULT_MEMORY_SIZE * 3;
+    auto *ram = new char[ram_size];
 
-    auto joiner = joiner_t<uint32_t>(DEFAULT_MEMORY_SIZE);
-    joiner.do_join(in, out);
+    typedef joiner_t<uint32_t, pair, pair, three> joiner32_t;
+    auto deuce_merger = merger_t<joiner32_t::left_src_t>(
+            (joiner32_t::left_src_t *) ram, ram_size);
 
-    fclose(in);
-    fclose(out);
+    deuce_merger.sort(input, BY_FIRST_FILE_NAME, cmp_by<uint32_t, 0>);
+    deuce_merger.sort(input, BY_SECOND_FILE_NAME, cmp_by<uint32_t, 1>);
+
+    auto joiner = joiner32_t(ram, ram_size);
+    joiner.join(BY_SECOND_FILE_NAME, BY_FIRST_FILE_NAME, RESULT_FILE_NAME, join_deuces);
+
+    auto set_merger = merger_t<joiner32_t::target_t>(
+            (joiner32_t::target_t *) ram, ram_size);
+    set_merger.write_output_size = false;
+    set_merger.sort(RESULT_FILE_NAME, output, cmp_by<uint32_t, 0>);
+
+    delete[] ram;
     return 0;
 }
