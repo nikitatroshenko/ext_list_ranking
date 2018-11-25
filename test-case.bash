@@ -42,7 +42,7 @@ if [[ ${RC} -ne 0 ]]
 then
     echo -e "[${RED} WA  ${NC}]\tfor ${1}"
     cp ./input.bin ./tests/input.bin.$(date +%N)
-elif [[ $(bc <<<"$ELAPSED>3") -eq 1 ]]
+elif [[ $(bc <<<"$ELAPSED>15") -eq 1 ]]
 then
     echo -e "[${ORANGE} TLE ${NC}]\t ${ELAPSED}s for ${1}"
 else

@@ -1,15 +1,14 @@
 BLOCK_SIZE=256
-MEMO_SIZE=8192
+MEMO_SIZE=204800
 MERGE_RANK=8
 
-CFLAGS=-g -DDEFAULT_MEMORY_SIZE=$(MEMO_SIZE) -DDEFAULT_BLOCK_SIZE=$(BLOCK_SIZE) -D_LOCAL_TEST -DDEFAULT_MERGE_RANK=$(MERGE_RANK)
+CFLAGS=-g -DDEFAULT_MEMORY_SIZE=$(MEMO_SIZE) -DDEFAULT_BLOCK_SIZE=$(BLOCK_SIZE) -D_LOCAL_TEST -DDEFAULT_MERGE_RANK=$(MERGE_RANK)  -DONLINE_JUDGE -O2 -static -Wall -Wextra -x c++ --std=c++11
 
 all: executables
 
 test: executables
 	./test-case.bash 8
 	./test-case.bash 512
-	./test-case.bash 0
 	./test-case.bash 262144
 	./test-case.bash 524288
 	./test-case.bash 33333
