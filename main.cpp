@@ -233,6 +233,7 @@ struct merger_t {
 
     void do_merge_sort(
             FILE *in,
+            FILE *out,
             comparator_func_t cmp = cmp_elements<element_T>,
             size_t rank = DEFAULT_MERGE_RANK) {
         split_into_runs(in, cmp);
@@ -248,10 +249,15 @@ struct merger_t {
 
         if (runs->size() == 0) {
             // should never happen since N > 1
+            fseek(in, 0, SEEK_SET);
+            merge(&in, 1, out, cmp);
             return;
         }
         auto files = new FILE *[rank];
         auto **used_runs = new run_t *[rank];
+
+        auto write_output_size = this->write_output_size;
+        this->write_output_size = true;
 
         while (runs->size() > 1) {
             size_t files_cnt = 0;
@@ -271,6 +277,11 @@ struct merger_t {
             freopen(result->get_name(), "rb+", result->file);
             setvbuf(result->file, (char *) block_start, _IOFBF, result_block_size * sizeof *block_start);
         }
+        used_runs[0] = runs->get(ram, sizeof *ram, ram_size_elements);
+
+        this->write_output_size = write_output_size;
+        merge(&used_runs[0]->file, 1, out, cmp);
+        runs->release(used_runs[0]);
         runs->release(result);
 
         delete[] used_runs;
@@ -283,18 +294,12 @@ struct merger_t {
             comparator_func_t cmp = cmp_elements<element_T>,
             size_t merge_rank = DEFAULT_MERGE_RANK) {
         FILE *input = fopen(input_name, "rb");
+        FILE *output = fopen(output_name, "wb");
 
-        do_merge_sort(input, cmp, merge_rank);
-
-        auto *last_run = runs->get();
-        char last_run_name[MAX_PATH]{};
-        strcpy(last_run_name, last_run->get_name());
-        runs->release(last_run);
-
-        auto rc = rename(last_run_name, output_name);
-        assert(rc == 0);
+        do_merge_sort(input, output, cmp, merge_rank);
 
         fclose(input);
+        fclose(output);
     }
 
     ~merger_t() {
