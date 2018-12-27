@@ -52,7 +52,7 @@
 #endif
 
 #ifndef MAX_PATH
-#define MAX_PATH 20
+#define MAX_PATH 50
 #endif
 
 #ifndef __compar_fn_t
@@ -120,6 +120,7 @@ struct run_pool_t {
 
     void release(run_t *run) {
         fclose(run->file);
+        // remove(run->get_name());
         delete run;
     }
 
@@ -166,7 +167,7 @@ struct merger_t {
             self_alloc(false) {}
 
     void split_into_runs(FILE *in, comparator_func_t cmp) {
-        elements_size_t size;
+        elements_size_t size = 0;
 
         fread(&size, sizeof size, 1, in);
         size_t runs_cnt = (size != 0) ? 1 + ((size - 1) / ram_size_elements) : 0; // ceiling
@@ -313,6 +314,16 @@ struct merger_t {
 template<typename element_T, size_t len>
 struct tuple {
     element_T elem[len];
+
+    tuple() : elem{} {}
+
+    tuple(std::initializer_list<element_T> &&il) {
+        auto it = il.begin();
+        for (size_t i = 0; i < len; ++i) {
+            elem[i] = *it;
+            it++;
+        }
+    }
 
     typedef element_T element_t;
 };
@@ -556,10 +567,10 @@ int main() {
                 return true;
             });
 
-    std::random_device rd{};
-    std::mt19937 mt(rd());
+//    std::random_device rd{};
+//    std::mt19937 mt(rd());
 //    std::mt19937 mt(0);
-    std::uniform_int_distribution<uint32_t> uid(0, 1);
+//    std::uniform_int_distribution<uint32_t> uid(0, 1);
 
     auto flagger = mapper_t<three, four>(ram, ram_size);
     auto weighted_sorter = merger_t<four>(ram, ram_size);
@@ -575,11 +586,11 @@ int main() {
     while (true) {
         flagger.map(format_name(WEIGHTED_NAME_PATTERN, iteration),
                     JOIN_RESULT_NAME,
-                    [&uid, &mt](const three &src, four &target) {
+                    [/*&uid, &mt*/](const three &src, four &target) {
                         target.elem[0] = src.elem[0];                       // i
                         target.elem[1] = src.elem[1];                       // n(i)
                         target.elem[2] = src.elem[2];                       // w(i)
-                        target.elem[3] = static_cast<uint32_t>(uid(mt));    // f(i)
+                        target.elem[3] = static_cast<uint32_t>(rand() % 2);    // f(i)
                         return true;
                     });
         weighted_sorter.sort(JOIN_RESULT_NAME, JOIN_LEFT_NAME, cmp_by<uint32_t, 0>);
@@ -662,7 +673,7 @@ int main() {
             ranked[i].elem[0] = cur.elem[1]; // n(i)
             ranked[i].elem[1] = cur.elem[2] + ranked[i - 1].elem[1]; // w(i) + r(p(i))
 
-            auto next = three{cur.elem[1], 0, 0};
+            three next = three({cur.elem[1], 0u, 0u});
             cur = *(three *) bsearch(&next, weighted, size, sizeof *weighted, cmp_by<three::element_t, 0>);
         }
         // sort by i for further join

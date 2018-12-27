@@ -15,6 +15,9 @@ AR="output.bin"
 
 bsort=/home/nikita/Programs/bsort/src/bsort
 
+rm -f *.bin
+rm -f /tmp/*.bin
+
 ./test_gen.out $1
 
 START_TIME="$(date -u +%s.%N)"
